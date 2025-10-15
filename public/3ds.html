@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Verificación 3-D Secure</title>
+  <!-- Songbird Cardinal (usa el que te dio el gateway si cambia el host) -->
+  <script src="https://songbird.cardinalcommerce.com/edge/v1/songbird.js"></script>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;padding:24px}
+    .card{max-width:520px;margin:0 auto;border:1px solid #ddd;border-radius:14px;padding:20px}
+    .status{padding:10px;border-radius:8px;background:#f7f7f7;margin-top:12px;word-break:break-word}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;background:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Verificación 3-D Secure</h2>
+    <p>Estamos confirmando la autenticación con tu banco…</p>
+    <div id="log" class="status">Cargando…</div>
+    <div style="margin-top:12px">
+      <button id="btnReintentar" style="display:none">Reintentar</button>
+    </div>
+  </div>
+
+  <script>
+    // 1) Tomar el JWT (payload) de la URL: /3ds.html?token=JWT&uuid=PAYMENT_UUID
+    const params = new URLSearchParams(location.search);
+    const JWT = params.get('token');          // payload devuelto por /api/pagos
+    const PAYMENT_UUID = params.get('uuid');  // útil para devolverlo a la app
+    const log = (m)=>{ document.getElementById('log').textContent = m; };
+
+    if (!JWT) {
+      log("Falta 'token' en la URL.");
+    } else {
+      // 2) Iniciar Songbird (Cardinal)
+      Cardinal.configure({ logging: { level: "on" } });
+
+      // 3) Eventos útiles
+      Cardinal.on("payments.setupComplete", function() {
+        log("Autenticación iniciada, mostrando reto si es necesario…");
+      });
+
+      Cardinal.on("payments.validated", function(data, jwt) {
+        // data: resultado del 3DS (status, actionCode, etc.)
+        // 4) Devolver el resultado a la app (WebView) con postMessage
+        const result = { type: "3DS_RESULT", payment_uuid: PAYMENT_UUID, data, jwt };
+        try {
+          // a) Si el WebView usa window.postMessage (FlutterFlow)
+          window.parent && window.parent.postMessage(JSON.stringify(result), "*");
+          // b) Si se abrió en new window/tab
+          window.opener && window.opener.postMessage(JSON.stringify(result), "*");
+        } catch(e){}
+
+        // 5) Mostrar estado en la página
+        log("Validación finalizada. Puedes cerrar esta ventana.");
+      });
+
+      // 6) Lanzar el flujo con el JWT (token) entregado por el backend
+      try {
+        log("Iniciando reto 3-D Secure…");
+        Cardinal.start("cca", { jwt: JWT }); // algunos gateways usan start+continue, otros solo start con jwt
+        // Si tu gateway requiere 'continue', descomenta abajo y ajusta 'OrderDetails':
+        // Cardinal.continue("cca", { jwt: JWT }, { OrderDetails: {} });
+      } catch (err) {
+        log("Error iniciando 3DS: " + (err?.message || err));
+        document.getElementById('btnReintentar').style.display = 'inline-block';
+      }
+
+      // Reintentar si algo falla
+      document.getElementById('btnReintentar').onclick = () => location.reload();
+    }
+  </script>
+</body>
+</html>
