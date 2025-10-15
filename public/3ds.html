@@ -6,26 +6,29 @@
   <title>Verificación 3-D Secure</title>
   <script src="https://songbird.cardinalcommerce.com/edge/v1/songbird.js"></script>
   <style>
+    :root { color-scheme: light; }
     body{font-family:system-ui,Arial;margin:0;padding:24px;background:#fafafa}
     .card{max-width:560px;margin:0 auto;border:1px solid #ddd;border-radius:14px;padding:20px;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,.05)}
-    .status{padding:10px;border-radius:8px;background:#f7f7f7;margin-top:12px;white-space:pre-wrap;word-break:break-word}
-    .muted{color:#777;font-size:13px}
+    .title{margin:0 0 8px}
+    .muted{color:#777;font-size:13px;margin:0 0 8px}
+    .status{padding:10px;border-radius:8px;background:#f7f7f7;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Consolas,monospace;font-size:13px}
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>Verificación 3-D Secure</h2>
+    <h2 class="title">Verificación 3-D Secure</h2>
     <p class="muted">Estamos confirmando la autenticación con tu banco…</p>
     <div id="log" class="status">Cargando…</div>
   </div>
 
   <script>
-    const L = (m,o)=>{const el=document.getElementById('log'); el.textContent += "\n"+m+(o? " "+JSON.stringify(o,null,2):""); console.log("[3DS]",m,o||"");};
+    const L=(m,o)=>{const el=document.getElementById('log');el.textContent+="\n"+m+(o?" "+JSON.stringify(o,null,2):"");console.log("[3DS]",m,o||"");};
 
-    // Parámetros:
     const qs = new URLSearchParams(location.search);
-    const TOKEN = qs.get('token');                  // flujo JWT (songbird)
-    const AcsUrl = qs.get('acsUrl');                // flujo continue
+    // Modo JWT
+    const TOKEN = qs.get('token');
+    // Modo continue
+    const AcsUrl = qs.get('acsUrl');
     const Payload = qs.get('payload');
     const TransactionId = qs.get('transactionId');
 
@@ -34,36 +37,36 @@
     Cardinal.on("payments.validated", function (data, jwt) {
       L("✅ payments.validated", data);
       const result = { type:"3DS_RESULT", data, jwt };
-      try{ window.parent?.postMessage(JSON.stringify(result), "*"); }catch(e){}
-      try{ window.opener?.postMessage(JSON.stringify(result), "*"); }catch(e){}
+      try { window.parent?.postMessage(JSON.stringify(result), "*"); } catch(e){}
+      try { window.opener?.postMessage(JSON.stringify(result), "*"); } catch(e){}
       L("Validación finalizada. Puedes cerrar esta ventana.");
     });
 
     (function run(){
-      // Caso 1: JWT (setup + start)
+      // Caso 1: JWT -> setup + start
       if (TOKEN && !AcsUrl && !Payload && !TransactionId) {
         L("Usando flujo JWT (setup + start)");
         Cardinal.on("payments.setupComplete", function(data){
           L("payments.setupComplete", data);
-          try{
+          try {
             Cardinal.start("cca", { jwt: TOKEN });
             L("start('cca') lanzado");
-          }catch(e){ L("Error start:", e?.message||e); }
+          } catch (e) { L("Error start('cca'):", e?.message||e); }
         });
-        try{
+        try {
           Cardinal.setup("init", { jwt: TOKEN });
           L("setup('init') enviado");
-        }catch(e){ L("Error setup:", e?.message||e); }
+        } catch (e) { L("Error setup('init'):", e?.message||e); }
         return;
       }
 
-      // Caso 2: continue (AcsUrl + Payload + TransactionId)
+      // Caso 2: continue (AcsUrl/Payload/TransactionId)
       if (AcsUrl && Payload && TransactionId) {
         L("Usando flujo continue (AcsUrl/Payload/TransactionId)");
-        try{
+        try {
           Cardinal.continue("cca", { AcsUrl, Payload, TransactionId }, {});
           L("continue('cca') lanzado");
-        }catch(e){ L("Error continue:", e?.message||e); }
+        } catch (e) { L("Error continue('cca'):", e?.message||e); }
         return;
       }
 
