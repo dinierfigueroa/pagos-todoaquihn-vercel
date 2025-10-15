@@ -6,21 +6,37 @@
   <title>Verificación 3-D Secure</title>
   <script src="https://songbird.cardinalcommerce.com/edge/v1/songbird.js"></script>
   <style>
-    body{font-family:system-ui,Arial;margin:0;padding:24px}
-    .card{max-width:640px;margin:0 auto;border:1px solid #ddd;border-radius:14px;padding:20px}
-    .status{padding:10px;border-radius:8px;background:#f7f7f7;margin-top:12px;word-break:break-word;white-space:pre-wrap}
-    code{background:#f0f0f0;padding:2px 4px;border-radius:6px}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;background:#fff;cursor:pointer}
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #fafafa;
+    }
+    .card {
+      max-width: 520px;
+      margin: 0 auto;
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 20px;
+      background: white;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+    .status {
+      padding: 10px;
+      border-radius: 8px;
+      background: #f7f7f7;
+      margin-top: 12px;
+      word-break: break-word;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <div class="card">
     <h2>Verificación 3-D Secure</h2>
     <p>Estamos confirmando la autenticación con tu banco…</p>
-    <div id="log" class="status">Iniciando reto 3-D Secure…</div>
-    <div style="margin-top:12px">
-      <button id="btnReintentar" style="display:none">Reintentar</button>
-    </div>
+    <div id="log" class="status">Cargando parámetros...</div>
   </div>
 
   <script>
@@ -30,66 +46,36 @@
       console.log("[3DS]", msg, obj || "");
     };
 
-    // Captura errores JS
-    window.onerror = function(msg, src, line, col, err){ L("JS error: " + msg); };
-
-    // 1) Params ?token=JWT&uuid=PAYMENT_UUID
+    // 1️⃣ Obtener parámetros de la URL
     const qs = new URLSearchParams(location.search);
-    const JWT = qs.get("token");
-    const PAYMENT_UUID = qs.get("uuid");
-    if (!JWT) { L("Falta parámetro ?token= (JWT)."); }
+    const AcsUrl        = qs.get('acsUrl');
+    const Payload       = qs.get('payload');
+    const TransactionId = qs.get('transactionId');
 
-    // 2) Configurar Cardinal
+    if (!AcsUrl || !Payload || !TransactionId) {
+      L("❌ Faltan parámetros obligatorios (AcsUrl, Payload o TransactionId).");
+      throw new Error("Parámetros incompletos en la URL.");
+    }
+
+    // 2️⃣ Configurar Cardinal
     Cardinal.configure({ logging: { level: "on" } });
 
-    // Eventos útiles
-    Cardinal.on("payments.setupComplete", function(data){
-      L("payments.setupComplete", data);
-      // Intento 1: lanzar challenge con el mismo JWT
-      try {
-        Cardinal.start("cca", { jwt: JWT });
-        L("start('cca') lanzado");
-      } catch(e) {
-        L("Error en start('cca'):", { e: e?.message || e });
-      }
-    });
-
-    Cardinal.on("payments.validated", function(data, jwt){
-      L("payments.validated", data);
-      // Devolver a la app (WebView) el resultado
-      const result = { type:"3DS_RESULT", payment_uuid: PAYMENT_UUID, data, jwt };
-      try { window.parent && window.parent.postMessage(JSON.stringify(result), "*"); } catch(e){}
-      try { window.opener && window.opener.postMessage(JSON.stringify(result), "*"); } catch(e){}
+    // 3️⃣ Evento principal: resultado del reto
+    Cardinal.on("payments.validated", function(data, jwt) {
+      L("✅ Resultado del 3DS", data);
+      const result = { type:"3DS_RESULT", data, jwt };
+      try { window.parent?.postMessage(JSON.stringify(result), "*"); } catch(e){}
+      try { window.opener?.postMessage(JSON.stringify(result), "*"); } catch(e){}
       L("Validación finalizada. Puedes cerrar esta ventana.");
     });
 
-    // 3) Flujo
-    (function run(){
-      if (!JWT) return;
-      try {
-        // Intento A: algunos gateways requieren setup con el mismo JWT
-        Cardinal.setup("init", { jwt: JWT });
-        L("setup('init') enviado");
-        // El start se hace en payments.setupComplete
-        // ---- Fallback en 5s: probar 'continue' si no pasó nada ----
-        setTimeout(() => {
-          L("Timeout 5s: intentando fallback con continue('cca')");
-          try {
-            Cardinal.continue("cca", { jwt: JWT }, { OrderDetails: {} });
-            L("continue('cca') lanzado");
-          } catch(e){
-            L("Error en continue('cca'):", { e: e?.message || e });
-            document.getElementById('btnReintentar').style.display = 'inline-block';
-          }
-        }, 5000);
-      } catch(e) {
-        L("Error en setup('init'):", { e: e?.message || e });
-        document.getElementById('btnReintentar').style.display = 'inline-block';
-      }
-    })();
-
-    // Reintentar
-    document.getElementById('btnReintentar').onclick = () => location.reload();
+    // 4️⃣ Lanzar el reto (challenge)
+    try {
+      L("Iniciando reto 3-D Secure...");
+      Cardinal.continue("cca", { AcsUrl, Payload, TransactionId }, {});
+    } catch (e) {
+      L("Error al iniciar Cardinal.continue:", e);
+    }
   </script>
 </body>
 </html>
