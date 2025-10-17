@@ -6,34 +6,32 @@
   <title>Verificación 3-D Secure</title>
   <script src="https://songbird.cardinalcommerce.com/edge/v1/songbird.js"></script>
   <style>
-    :root { color-scheme: light; }
     body{font-family:system-ui,Arial;margin:0;padding:24px;background:#fafafa}
     .card{max-width:560px;margin:0 auto;border:1px solid #ddd;border-radius:14px;padding:20px;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,.05)}
-    .title{margin:0 0 8px}
-    .muted{color:#777;font-size:13px;margin:0 0 8px}
-    .status{padding:10px;border-radius:8px;background:#f7f7f7;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+    .muted{color:#777;font-size:13px}
+    .status{padding:10px;border-radius:8px;background:#f7f7f7;margin-top:12px;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Consolas,monospace;font-size:13px}
   </style>
 </head>
 <body>
   <div class="card">
-    <h2 class="title">Verificación 3-D Secure</h2>
+    <h2>Verificación 3-D Secure</h2>
     <p class="muted">Estamos confirmando la autenticación con tu banco…</p>
     <div id="log" class="status">Cargando…</div>
   </div>
 
   <script>
-    const L=(m,o)=>{const el=document.getElementById('log');el.textContent+="\n"+m+(o?" "+JSON.stringify(o,null,2):"");console.log("[3DS]",m,o||"");};
+    const logEl = document.getElementById('log');
+    const L = (m,o)=>{ logEl.textContent += "\n"+m+(o?" "+JSON.stringify(o,null,2):""); console.log("[3DS]", m, o||""); };
 
+    // Recibe ?token=<JWT>&uuid=<payment_uuid>
     const qs = new URLSearchParams(location.search);
-    // Modo JWT
     const TOKEN = qs.get('token');
-    // Modo continue
-    const AcsUrl = qs.get('acsUrl');
-    const Payload = qs.get('payload');
-    const TransactionId = qs.get('transactionId');
+    if (!TOKEN) { L("❌ Falta ?token (JWT)."); throw new Error("Missing JWT"); }
 
-    Cardinal.configure({ logging: { level: "on" }});
+    // Configurar
+    Cardinal.configure({ logging: { level: "on" } });
 
+    // Resultado
     Cardinal.on("payments.validated", function (data, jwt) {
       L("✅ payments.validated", data);
       const result = { type:"3DS_RESULT", data, jwt };
@@ -42,36 +40,21 @@
       L("Validación finalizada. Puedes cerrar esta ventana.");
     });
 
-    (function run(){
-      // Caso 1: JWT -> setup + start
-      if (TOKEN && !AcsUrl && !Payload && !TransactionId) {
-        L("Usando flujo JWT (setup + start)");
-        Cardinal.on("payments.setupComplete", function(data){
-          L("payments.setupComplete", data);
-          try {
-            Cardinal.start("cca", { jwt: TOKEN });
-            L("start('cca') lanzado");
-          } catch (e) { L("Error start('cca'):", e?.message||e); }
-        });
-        try {
-          Cardinal.setup("init", { jwt: TOKEN });
-          L("setup('init') enviado");
-        } catch (e) { L("Error setup('init'):", e?.message||e); }
-        return;
-      }
+    // Flujo JWT (songbird): setup + start
+    Cardinal.on("payments.setupComplete", function(data){
+      L("payments.setupComplete", data);
+      try {
+        // ¡IMPORTANTE! Aquí va en MAYÚSCULAS: JWT
+        Cardinal.start("cca", { JWT: TOKEN });
+        L("start('cca') lanzado con JWT");
+      } catch (e) { L("Error start:", e?.message || e); }
+    });
 
-      // Caso 2: continue (AcsUrl/Payload/TransactionId)
-      if (AcsUrl && Payload && TransactionId) {
-        L("Usando flujo continue (AcsUrl/Payload/TransactionId)");
-        try {
-          Cardinal.continue("cca", { AcsUrl, Payload, TransactionId }, {});
-          L("continue('cca') lanzado");
-        } catch (e) { L("Error continue('cca'):", e?.message||e); }
-        return;
-      }
-
-      L("❌ Faltan parámetros: token (JWT) o acsUrl/payload/transactionId.");
-    })();
+    try {
+      // En setup el campo es en minúsculas: jwt
+      Cardinal.setup("init", { jwt: TOKEN });
+      L("setup('init') enviado con jwt");
+    } catch (e) { L("Error setup:", e?.message || e); }
   </script>
 </body>
 </html>

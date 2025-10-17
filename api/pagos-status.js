@@ -1,6 +1,6 @@
+// api/pagos-status.js
 import axios from "axios";
 import crypto from "crypto";
-
 const sha512 = (s) => crypto.createHash("sha512").update(s).digest("hex");
 
 export default async function handler(req, res) {
@@ -11,12 +11,10 @@ export default async function handler(req, res) {
       "Content-Type": "application/json",
       "x-auth-key": process.env.PIXELPAY_KEY_ID,
       "x-auth-hash": sha512(process.env.PIXELPAY_SECRET_KEY),
-      // x-auth-user solo es requerido para VOID; para status no hace falta
     };
 
-    const url = `${process.env.PIXELPAY_BASE}/api/v2/transaction/status`; // <- ruta oficial
-    const body = req.body || {}; // { payment_uuid, env? }
-    const { data, status } = await axios.post(url, body, { headers });
+    const url = `${process.env.PIXELPAY_BASE}/api/v2/transaction/status`;
+    const { data, status } = await axios.post(url, req.body || {}, { headers, timeout: 20000 });
 
     return res.status(status || 200).json(data);
   } catch (err) {
