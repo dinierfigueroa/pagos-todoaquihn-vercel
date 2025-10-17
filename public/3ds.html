@@ -18,20 +18,16 @@
     <p class="muted">Estamos confirmando la autenticación con tu banco…</p>
     <div id="log" class="status">Cargando…</div>
   </div>
-
   <script>
     const logEl = document.getElementById('log');
     const L = (m,o)=>{ logEl.textContent += "\n"+m+(o?" "+JSON.stringify(o,null,2):""); console.log("[3DS]", m, o||""); };
 
-    // Recibe ?token=<JWT>&uuid=<payment_uuid>
     const qs = new URLSearchParams(location.search);
     const TOKEN = qs.get('token');
     if (!TOKEN) { L("❌ Falta ?token (JWT)."); throw new Error("Missing JWT"); }
 
-    // Configurar
     Cardinal.configure({ logging: { level: "on" } });
 
-    // Resultado
     Cardinal.on("payments.validated", function (data, jwt) {
       L("✅ payments.validated", data);
       const result = { type:"3DS_RESULT", data, jwt };
@@ -40,19 +36,16 @@
       L("Validación finalizada. Puedes cerrar esta ventana.");
     });
 
-    // Flujo JWT (songbird): setup + start
     Cardinal.on("payments.setupComplete", function(data){
       L("payments.setupComplete", data);
       try {
-        // ¡IMPORTANTE! Aquí va en MAYÚSCULAS: JWT
-        Cardinal.start("cca", { JWT: TOKEN });
+        Cardinal.start("cca", { JWT: TOKEN }); // <<— MAYÚSCULAS
         L("start('cca') lanzado con JWT");
       } catch (e) { L("Error start:", e?.message || e); }
     });
 
     try {
-      // En setup el campo es en minúsculas: jwt
-      Cardinal.setup("init", { jwt: TOKEN });
+      Cardinal.setup("init", { jwt: TOKEN });   // <<— minúsculas
       L("setup('init') enviado con jwt");
     } catch (e) { L("Error setup:", e?.message || e); }
   </script>
