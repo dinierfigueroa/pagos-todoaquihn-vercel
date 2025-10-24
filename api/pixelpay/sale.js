@@ -1,21 +1,29 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const readJson = require('../_utils/readJson');
+const setCors = require('../_utils/cors');
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (setCors(res, req)) return;
+
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const { JWT_SECRET, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY, PIXELPAY_SALE_URL, TIMEOUT_MS } = process.env;
   if (!JWT_SECRET || !PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY || !PIXELPAY_SALE_URL) {
-    return res.status(500).json({ error: 'ENV_MISSING' });
+    res.status(500).json({ error: 'ENV_MISSING' }); return;
   }
 
+  // Bearer <jwt>
   const auth = req.headers.authorization || '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
-  if (!m) return res.status(401).json({ error: 'MISSING_BEARER' });
-  try { jwt.verify(m[1], JWT_SECRET); } catch { return res.status(401).json({ error: 'INVALID_TOKEN' }); }
+  if (!m) { res.status(401).json({ error: 'MISSING_BEARER' }); return; }
+  try { jwt.verify(m[1], JWT_SECRET); } catch { res.status(401).json({ error: 'INVALID_TOKEN' }); return; }
 
-  const payload = req.body;
-  if (!payload || typeof payload !== 'object') return res.status(400).json({ error: 'MISSING_PAYLOAD' });
+  let payload;
+  try { payload = await readJson(req); } 
+  catch { res.status(400).json({ error: 'INVALID_JSON' }); return; }
+
+  if (!payload || typeof payload !== 'object') { res.status(400).json({ error: 'MISSING_PAYLOAD' }); return; }
 
   const bodyStr = JSON.stringify(payload);
   const hash = crypto.createHmac('sha256', PIXELPAY_SECRET_KEY).update(bodyStr).digest('hex');
@@ -35,8 +43,8 @@ module.exports = async function handler(req, res) {
 
     const text = await r.text();
     let data = null; try { data = JSON.parse(text); } catch {}
-    return res.status(r.ok ? 200 : r.status).json(data || { raw: text });
+    res.status(r.ok ? 200 : r.status).json(data || { raw: text });
   } catch (e) {
-    return res.status(500).json({ error: 'SALE_FAILED', detail: String(e) });
+    res.status(500).json({ error: 'SALE_FAILED', detail: String(e) });
   }
 };
