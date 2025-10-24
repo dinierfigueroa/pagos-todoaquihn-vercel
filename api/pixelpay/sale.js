@@ -9,7 +9,6 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'ENV_MISSING' });
   }
 
-  // Bearer <jwt>
   const auth = req.headers.authorization || '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: 'MISSING_BEARER' });

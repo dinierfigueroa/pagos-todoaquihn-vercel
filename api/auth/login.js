@@ -9,7 +9,6 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // body siempre JSON
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'MISSING_CREDENTIALS' });
     if (email !== AUTH_EMAIL || password !== AUTH_PASSWORD) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
