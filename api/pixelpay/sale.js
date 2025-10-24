@@ -1,89 +1,56 @@
 // /api/pixelpay/sale.js
-export const runtime = 'edge';
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Method Not Allowed' });
+  }
 
-const REQ_ENVS = ['PIXELPAY_KEY_ID', 'PIXELPAY_SECRET_KEY', 'PIXELPAY_SALE_URL'];
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
-
-export default async function handler(req) {
   try {
-    // 1) Debe venir Bearer (de tu /api/auth/login)
-    const auth = req.headers.get('authorization') || '';
-    if (!auth.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ success:false, message:'MISSING_BEARER' }), {
-        status: 401, headers: { 'content-type': 'application/json' }
+    const {
+      PIXELPAY_SALE_URL,
+      PIXELPAY_KEY_ID,
+      PIXELPAY_SECRET_KEY,
+      PIXELPAY_ENV
+    } = process.env;
+
+    if (!PIXELPAY_SALE_URL || !PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY) {
+      return res.status(500).json({
+        success: false,
+        message: 'Server misconfigured: missing PixelPay env vars'
       });
     }
 
-    // 2) Lee body (order/card/billing)
-    const basePayload = await req.json();
+    // El body que envías desde FlutterFlow (order, card, billing).
+    const payload = req.body || {};
 
-    // 3) Envs
-    REQ_ENVS.forEach(must);
-    const KEY_ID   = must('PIXELPAY_KEY_ID');        // BR1433566376
-    const SECRET   = must('PIXELPAY_SECRET_KEY');    // c7371377-...
-    const SALE_URL = must('PIXELPAY_SALE_URL');      // *** RUTA 3DS exacta ***
-    const TIMEOUT  = parseInt(process.env.TIMEOUT_MS || '30000', 10);
-    const RETURN_URL   = process.env.PIXELPAY_RETURN_URL;
-    const CALLBACK_URL = process.env.PIXELPAY_CALLBACK_URL;
+    // En sandbox es obligatorio enviar env:"sandbox"
+    if (PIXELPAY_ENV === 'sandbox' && !payload.env) {
+      payload.env = 'sandbox';
+    }
 
-    // 4) Arma el payload final (agregando URLs 3DS si las tienes)
-    const payload = {
-      ...basePayload,
-      ...(RETURN_URL ? { return_url: RETURN_URL } : {}),
-      ...(CALLBACK_URL ? { callback_url: CALLBACK_URL } : {}),
-    };
-
-    // 5) Headers esperados por PixelPay
-    const headers = {
-      'content-type': 'application/json',
-      'accept': 'application/json',
-      'KEY': SECRET,
-      'ID': KEY_ID,
-      // Duplicados por si su API los mapea así:
-      'X-API-KEY': SECRET,
-      'X-API-ID': KEY_ID,
-    };
-
-    // 6) Llamada upstream
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), TIMEOUT);
-    const resp = await fetch(SALE_URL, {
+    // Llamada a PixelPay
+    const upstream = await fetch(PIXELPAY_SALE_URL, {
       method: 'POST',
-      headers,
+      headers: {
+        'content-type': 'application/json',
+        'x-auth-key': PIXELPAY_KEY_ID,       // <— Public Key (la larga)
+        'x-auth-hash': PIXELPAY_SECRET_KEY,  // <— Secret Key
+      },
       body: JSON.stringify(payload),
-      signal: controller.signal,
-    }).catch(err => {
-      if (err.name === 'AbortError') {
-        return new Response(JSON.stringify({ success:false, message:'UPSTREAM_TIMEOUT' }), {
-          status: 504, headers: { 'content-type': 'application/json' }
-        });
-      }
-      throw err;
     });
-    clearTimeout(t);
 
-    // 7) Si devuelven HTML (503 Heroku), reenvuélvelo para verlo claro
-    const ct = resp.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      const raw = await resp.text();
-      return new Response(JSON.stringify({ success:false, status: resp.status, raw }), {
-        status: 502,
-        headers: { 'content-type': 'application/json' }
-      });
-    }
+    const text = await upstream.text();
 
-    const data = await resp.json();
-    return new Response(JSON.stringify(data), {
-      status: resp.status,
-      headers: { 'content-type': 'application/json' }
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ success:false, message:'INTERNAL_ERROR', detail: String(e?.message || e) }), {
-      status: 500, headers: { 'content-type': 'application/json' }
+    // Intenta parsear JSON; si es HTML (error 503/Heroku), devuélvelo como raw.
+    let data;
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+    return res.status(upstream.status).json(data);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal error calling PixelPay',
+      error: err?.message || String(err),
     });
   }
 }
