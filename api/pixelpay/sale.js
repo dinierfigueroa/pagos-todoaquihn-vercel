@@ -1,7 +1,7 @@
-import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { JWT_SECRET, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY, PIXELPAY_SALE_URL, TIMEOUT_MS } = process.env;
@@ -9,19 +9,14 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'ENV_MISSING' });
   }
 
-  // 1) Validar Bearer <jwt>
   const auth = req.headers.authorization || '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: 'MISSING_BEARER' });
+  try { jwt.verify(m[1], JWT_SECRET); } catch { return res.status(401).json({ error: 'INVALID_TOKEN' }); }
 
-  try { jwt.verify(m[1], JWT_SECRET); } 
-  catch { return res.status(401).json({ error: 'INVALID_TOKEN' }); }
-
-  // 2) Payload de venta
   const payload = req.body;
   if (!payload || typeof payload !== 'object') return res.status(400).json({ error: 'MISSING_PAYLOAD' });
 
-  // 3) Firmar body para PixelPay v2 (x-auth-hash = HMAC-SHA256(body, secret))
   const bodyStr = JSON.stringify(payload);
   const hash = crypto.createHmac('sha256', PIXELPAY_SECRET_KEY).update(bodyStr).digest('hex');
 
@@ -35,15 +30,13 @@ export default async function handler(req, res) {
         'x-auth-hash': hash
       },
       body: bodyStr,
-      signal: AbortSignal.timeout(parseInt(TIMEOUT_MS || '30000')),
+      signal: AbortSignal.timeout(parseInt(TIMEOUT_MS || '30000'))
     });
 
     const text = await r.text();
     let data = null; try { data = JSON.parse(text); } catch {}
-
-    // Devuelve tal cual para manejar 3DS (redirect_url/acs_url/etc.)
     return res.status(r.ok ? 200 : r.status).json(data || { raw: text });
   } catch (e) {
     return res.status(500).json({ error: 'SALE_FAILED', detail: String(e) });
   }
-}
+};
