@@ -8,10 +8,15 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'ENV_MISSING', missing: ['AUTH_EMAIL','AUTH_PASSWORD','JWT_SECRET'] });
   }
 
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'MISSING_CREDENTIALS' });
-  if (email !== AUTH_EMAIL || password !== AUTH_PASSWORD) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+  try {
+    // body siempre JSON
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'MISSING_CREDENTIALS' });
+    if (email !== AUTH_EMAIL || password !== AUTH_PASSWORD) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
 
-  const token = jwt.sign({ sub: email, scope: 'payments' }, JWT_SECRET, { expiresIn: '10m' });
-  return res.status(200).json({ token, expires_in: 600 });
+    const token = jwt.sign({ sub: email, scope: 'payments' }, JWT_SECRET, { expiresIn: '10m' });
+    return res.status(200).json({ token, expires_in: 600 });
+  } catch (e) {
+    return res.status(500).json({ error: 'LOGIN_FAILED', detail: String(e) });
+  }
 };
