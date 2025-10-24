@@ -1,11 +1,7 @@
-const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const readJson = require('../_utils/readJson');
-const setCors = require('../_utils/cors');
+const { verify } = require('../_utils/token');
 
 module.exports = async function handler(req, res) {
-  if (setCors(res, req)) return;
-
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const { JWT_SECRET, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY, PIXELPAY_SALE_URL, TIMEOUT_MS } = process.env;
@@ -13,16 +9,22 @@ module.exports = async function handler(req, res) {
     res.status(500).json({ error: 'ENV_MISSING' }); return;
   }
 
-  // Bearer <jwt>
+  // Bearer <token>
   const auth = req.headers.authorization || '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) { res.status(401).json({ error: 'MISSING_BEARER' }); return; }
-  try { jwt.verify(m[1], JWT_SECRET); } catch { res.status(401).json({ error: 'INVALID_TOKEN' }); return; }
+  try { verify(m[1], JWT_SECRET); } catch (err) { res.status(401).json({ error: 'INVALID_TOKEN', detail: String(err) }); return; }
 
-  let payload;
-  try { payload = await readJson(req); } 
-  catch { res.status(400).json({ error: 'INVALID_JSON' }); return; }
+  // leer body
+  let raw = '';
+  await new Promise((resolve, reject) => {
+    req.on('data', c => (raw += c));
+    req.on('end', resolve);
+    req.on('error', reject);
+  });
 
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { res.status(400).json({ error: 'INVALID_JSON' }); return; }
   if (!payload || typeof payload !== 'object') { res.status(400).json({ error: 'MISSING_PAYLOAD' }); return; }
 
   const bodyStr = JSON.stringify(payload);
