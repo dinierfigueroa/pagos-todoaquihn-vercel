@@ -1,27 +1,48 @@
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const { JWT_SECRET, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY, PIXELPAY_SALE_URL, TIMEOUT_MS } = process.env;
+  if (!JWT_SECRET || !PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY || !PIXELPAY_SALE_URL) {
+    return res.status(500).json({ error: 'ENV_MISSING' });
+  }
+
+  // 1) Validar Bearer <jwt>
+  const auth = req.headers.authorization || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).json({ error: 'MISSING_BEARER' });
+
+  try { jwt.verify(m[1], JWT_SECRET); } 
+  catch { return res.status(401).json({ error: 'INVALID_TOKEN' }); }
+
+  // 2) Payload de venta
+  const payload = req.body;
+  if (!payload || typeof payload !== 'object') return res.status(400).json({ error: 'MISSING_PAYLOAD' });
+
+  // 3) Firmar body para PixelPay v2 (x-auth-hash = HMAC-SHA256(body, secret))
+  const bodyStr = JSON.stringify(payload);
+  const hash = crypto.createHmac('sha256', PIXELPAY_SECRET_KEY).update(bodyStr).digest('hex');
+
   try {
-    const { PIXELPAY_BASE, TIMEOUT_MS } = process.env;
-    const { token, payload } = req.body || {};
-
-    if (!token) return res.status(400).json({ error: 'MISSING_TOKEN' });
-    if (!payload) return res.status(400).json({ error: 'MISSING_PAYLOAD' });
-
-    const r = await fetch(`${PIXELPAY_BASE}/venta-directa-22835359e0`, {
+    const r = await fetch(PIXELPAY_SALE_URL, {
       method: 'POST',
       headers: {
+        'Accept': 'application/json',
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+        'x-auth-key': PIXELPAY_KEY_ID,
+        'x-auth-hash': hash
       },
-      body: JSON.stringify(payload),
+      body: bodyStr,
       signal: AbortSignal.timeout(parseInt(TIMEOUT_MS || '30000')),
     });
 
     const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    let data = null; try { data = JSON.parse(text); } catch {}
 
-    return res.status(r.ok ? 200 : r.status).json(data);
+    // Devuelve tal cual para manejar 3DS (redirect_url/acs_url/etc.)
+    return res.status(r.ok ? 200 : r.status).json(data || { raw: text });
   } catch (e) {
     return res.status(500).json({ error: 'SALE_FAILED', detail: String(e) });
   }
