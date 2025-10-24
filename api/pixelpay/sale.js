@@ -1,34 +1,34 @@
 const crypto = require('crypto');
-const { verify } = require('../_utils/token');
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { JWT_SECRET, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY, PIXELPAY_SALE_URL, TIMEOUT_MS } = process.env;
-  if (!JWT_SECRET || !PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY || !PIXELPAY_SALE_URL) {
-    res.status(500).json({ error: 'ENV_MISSING' }); return;
+  const { PIXELPAY_SALE_URL, PIXELPAY_KEY_ID, PIXELPAY_SECRET_KEY } = process.env;
+  if (!PIXELPAY_SALE_URL || !PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY) {
+    return res.status(500).json({ error: 'ENV_MISSING' });
   }
 
-  // Bearer <token>
+  // 1) Intentar Header Bearer
   const auth = req.headers.authorization || '';
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  if (!m) { res.status(401).json({ error: 'MISSING_BEARER' }); return; }
-  try { verify(m[1], JWT_SECRET); } catch (err) { res.status(401).json({ error: 'INVALID_TOKEN', detail: String(err) }); return; }
+  let sessionToken = auth.startsWith('Bearer ') ? auth.slice(7) : null;
 
-  // leer body
+  // 2) Leer body
   let raw = '';
-  await new Promise((resolve, reject) => {
-    req.on('data', c => (raw += c));
-    req.on('end', resolve);
-    req.on('error', reject);
-  });
+  await new Promise((ok, err) => { req.on('data', c => raw += c); req.on('end', ok); req.on('error', err); });
+  if (!raw) return res.status(400).json({ error: 'EMPTY_BODY' });
 
+  // 3) Si no hay Bearer, aceptar token desde el body y removerlo antes de reenviar
   let payload = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch { res.status(400).json({ error: 'INVALID_JSON' }); return; }
-  if (!payload || typeof payload !== 'object') { res.status(400).json({ error: 'MISSING_PAYLOAD' }); return; }
+  try { payload = JSON.parse(raw); } catch { return res.status(400).json({ error: 'INVALID_JSON' }); }
+  if (!sessionToken && payload && typeof payload.token === 'string') {
+    sessionToken = payload.token;
+    delete payload.token;
+    raw = JSON.stringify(payload);
+  }
+  if (!sessionToken) return res.status(401).json({ error: 'MISSING_TOKEN' });
 
-  const bodyStr = JSON.stringify(payload);
-  const hash = crypto.createHmac('sha256', PIXELPAY_SECRET_KEY).update(bodyStr).digest('hex');
+  // PixelPay: x-auth-hash = md5(secret)
+  const xAuthHash = crypto.createHash('md5').update(PIXELPAY_SECRET_KEY).digest('hex');
 
   try {
     const r = await fetch(PIXELPAY_SALE_URL, {
@@ -37,16 +37,15 @@ module.exports = async function handler(req, res) {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'x-auth-key': PIXELPAY_KEY_ID,
-        'x-auth-hash': hash
+        'x-auth-hash': xAuthHash
       },
-      body: bodyStr,
-      signal: AbortSignal.timeout(parseInt(TIMEOUT_MS || '30000'))
+      body: raw
     });
 
     const text = await r.text();
-    let data = null; try { data = JSON.parse(text); } catch {}
-    res.status(r.ok ? 200 : r.status).json(data || { raw: text });
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    res.status(r.status).json(json);
   } catch (e) {
-    res.status(500).json({ error: 'SALE_FAILED', detail: String(e) });
+    res.status(502).json({ error: 'UPSTREAM_ERROR', detail: String(e) });
   }
 };
