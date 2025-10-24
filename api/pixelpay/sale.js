@@ -1,119 +1,125 @@
 export const config = { runtime: 'edge' };
 
-const j = (s, d) =>
-  new Response(JSON.stringify(d), {
-    status: s,
+const respond = (status, data) =>
+  new Response(JSON.stringify(data), {
+    status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
 
-async function callPixelPay(url, auth, keyId, secretKey, payload, timeoutMs, variant = 1) {
+async function doCall(url, { auth, id, key, payload, timeoutMs, headerStyle = 'KEY_ID' }) {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const killer = setTimeout(() => controller.abort(), timeoutMs);
 
-  // Headers base (siempre pasamos tu Bearer de login)
-  const baseHeaders = {
+  const base = {
     'content-type': 'application/json',
-    authorization: auth, // Bearer <token> de /api/auth/login
+    authorization: auth, // tu Bearer hacia nuestro endpoint (no es para PixelPay auth)
   };
 
-  // Variantes de headers para credenciales del comercio
-  let credHeaders = {};
-  if (variant === 1) {
-    // Variante más común
-    credHeaders = {
-      'X-KEY-ID': keyId,
-      'X-SECRET-KEY': secretKey,
-      'x-key-id': keyId,
-      'x-secret-key': secretKey,
-    };
-  } else {
-    // Alternativa frecuente
-    credHeaders = {
-      'X-API-KEY': keyId,
-      'X-API-SECRET': secretKey,
-      'x-api-key': keyId,
-      'x-api-secret': secretKey,
+  let cred = {};
+  if (headerStyle === 'KEY_ID') {
+    // <- Estilo que PixelPay suele pedir (tal cual KEY / ID)
+    cred = { KEY: key, ID: id };
+  } else if (headerStyle === 'XKEY_XID') {
+    cred = { 'X-KEY': key, 'X-ID': id, 'x-key': key, 'x-id': id };
+  } else if (headerStyle === 'XAPI') {
+    cred = {
+      'X-API-KEY': id,
+      'X-API-SECRET': key,
+      'x-api-key': id,
+      'x-api-secret': key,
     };
   }
-
-  // En la variante 3 mandamos además credentials en el body (server->server)
-  const body =
-    variant === 3
-      ? JSON.stringify({ ...payload, credentials: { key_id: keyId, secret_key: secretKey } })
-      : JSON.stringify(payload);
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       signal: controller.signal,
-      headers: { ...baseHeaders, ...credHeaders },
-      body,
+      headers: { ...base, ...cred },
+      body: JSON.stringify(payload),
     });
-    clearTimeout(t);
+    clearTimeout(killer);
 
-    const text = await res.text();
+    const txt = await res.text();
     let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    try { data = JSON.parse(txt); } catch { data = { raw: txt }; }
 
     return { status: res.status, data };
-  } catch (err) {
-    clearTimeout(t);
-    const isAbort = err?.name === 'AbortError';
+  } catch (e) {
+    clearTimeout(killer);
+    const isAbort = e?.name === 'AbortError';
     return {
       status: 504,
       data: {
         success: false,
         message: isAbort ? 'Timeout hablando con PixelPay' : 'Falla de red',
-        detail: String(err),
+        detail: String(e),
       },
     };
   }
 }
 
 export default async function handler(req) {
-  if (req.method !== 'POST') return j(405, { success: false, message: 'Method Not Allowed' });
+  if (req.method !== 'POST') return respond(405, { success: false, message: 'Method Not Allowed' });
 
-  // 1) Bearer que envías desde FF
+  // Bearer que envías desde FlutterFlow (solo protege este endpoint)
   const auth = req.headers.get('authorization') || '';
   if (!auth.startsWith('Bearer '))
-    return j(401, { success: false, message: 'Falta header Authorization Bearer' });
+    return respond(401, { success: false, message: 'Falta header Authorization Bearer' });
 
-  // 2) Env vars
-  const SALE_URL = process.env.PIXELPAY_SALE_URL;
-  const KEY_ID = process.env.PIXELPAY_KEY_ID;
-  const SECRET_KEY = process.env.PIXELPAY_SECRET_KEY;
+  // Env vars
+  const SALE_URL   = process.env.PIXELPAY_SALE_URL;    // p.ej. https://banrural.pixelpay.app/api/v2/transaction/sale
+  const PIX_ID     = process.env.PIXELPAY_KEY_ID;      // BR1433566376
+  const PIX_KEY    = process.env.PIXELPAY_SECRET_KEY;  // c7371377-18b0-4ffc-59f8-a1619
   const TIMEOUT_MS = Number(process.env.TIMEOUT_MS || 30000);
 
-  if (!SALE_URL || !KEY_ID || !SECRET_KEY) {
-    return j(500, {
+  if (!SALE_URL || !PIX_ID || !PIX_KEY) {
+    return respond(500, {
       success: false,
       message:
-        'Faltan variables de entorno: PIXELPAY_SALE_URL / PIXELPAY_KEY_ID / PIXELPAY_SECRET_KEY',
+        'Faltan variables: PIXELPAY_SALE_URL / PIXELPAY_KEY_ID / PIXELPAY_SECRET_KEY',
     });
   }
 
-  // 3) Body desde FF (order/card/billing)
+  // Body desde FF (order/card/billing) — no incluyas token aquí
   let payload;
-  try {
-    payload = await req.json();
-  } catch {
-    return j(400, { success: false, message: 'Body JSON inválido' });
-  }
+  try { payload = await req.json(); }
+  catch { return respond(400, { success: false, message: 'Body JSON inválido' }); }
 
-  // 4) Intento 1: headers X-KEY-ID / X-SECRET-KEY
-  let r = await callPixelPay(SALE_URL, auth, KEY_ID, SECRET_KEY, payload, TIMEOUT_MS, 1);
-  const errMsg = (r.data?.message || '').toString().toLowerCase();
+  // Intento 1: headers exactos KEY / ID
+  let r = await doCall(SALE_URL, {
+    auth,
+    id: PIX_ID,
+    key: PIX_KEY,
+    payload,
+    timeoutMs: TIMEOUT_MS,
+    headerStyle: 'KEY_ID',
+  });
 
-  // Si PixelPay dice que la KEY es inválida, probamos variantes
-  if (r.status === 400 && (errMsg.includes('key') || errMsg.includes('llave'))) {
-    // Intento 2: X-API-KEY / X-API-SECRET
-    r = await callPixelPay(SALE_URL, auth, KEY_ID, SECRET_KEY, payload, TIMEOUT_MS, 2);
+  // Si sigue quejándose de KEY inválida, probamos variantes
+  const msg = (r.data?.message || '').toString().toLowerCase();
+  if (r.status === 400 && (msg.includes('key') || msg.includes('llave'))) {
+    // Variante X-KEY / X-ID
+    r = await doCall(SALE_URL, {
+      auth,
+      id: PIX_ID,
+      key: PIX_KEY,
+      payload,
+      timeoutMs: TIMEOUT_MS,
+      headerStyle: 'XKEY_XID',
+    });
 
     if (r.status === 400) {
-      // Intento 3: credentials en body (además de headers)
-      r = await callPixelPay(SALE_URL, auth, KEY_ID, SECRET_KEY, payload, TIMEOUT_MS, 3);
+      // Variante X-API-KEY / X-API-SECRET
+      r = await doCall(SALE_URL, {
+        auth,
+        id: PIX_ID,
+        key: PIX_KEY,
+        payload,
+        timeoutMs: TIMEOUT_MS,
+        headerStyle: 'XAPI',
+      });
     }
   }
 
-  return j(r.status, r.data);
+  return respond(r.status, r.data);
 }
