@@ -1,75 +1,65 @@
 // /api/pixelpay/sale.js
-export default async function handler(req, res) {
+export const config = { runtime: 'edge' };
+
+function env(name, fallback = '') {
+  const v = process.env[name] ?? '';
+  return (typeof v === 'string' && v.trim() !== '') ? v.trim() : fallback;
+}
+
+const PIXELPAY_BASE        = env('PIXELPAY_BASE', 'https://banrural.pixelpay.app'); // prod
+const PIXELPAY_SALE_URL    = env('PIXELPAY_SALE_URL', `${PIXELPAY_BASE}/api/v2/transaction/sale`);
+const PIXELPAY_PUBLIC_KEY  = env('PIXELPAY_PUBLIC_KEY') || env('PIXELPAY_KEY_ID');     // usa la pública larga (no BR…)
+const PIXELPAY_SECRET_KEY  = env('PIXELPAY_SECRET_KEY');                               // tu secret (UUID)
+
+function hmacHexSHA256(secret, raw) {
+  const enc = new TextEncoder();
+  const keyData = enc.encode(secret);
+  const payload = enc.encode(raw);
+  return crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    .then(k => crypto.subtle.sign('HMAC', k, payload))
+    .then(buf => {
+      const bytes = new Uint8Array(buf);
+      return [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+    });
+}
+
+export default async function handler(req) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, message: 'Method Not Allowed' });
-  }
-
-  try {
-    // 1) (Opcional) validar que venga tu token para proteger este endpoint
-    const auth = req.headers.authorization || '';
-    if (!auth.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, message: 'Missing Bearer token' });
-    }
-    // Si quieres validar el JWT, aquí lo verificas con tu JWT_SECRET.
-    // Si sólo quieres que exista, con esto basta.
-
-    // 2) Cargar variables
-    const env = (process.env.PIXELPAY_ENV || 'production').trim().toLowerCase();
-    const base =
-      env === 'sandbox'
-        ? 'https://pixelpay.dev'
-        : (process.env.PIXELPAY_BASE || 'https://banrural.pixelpay.app').trim();
-
-    // Ruta correcta (no es /3ds/)
-    const saleUrl = `${base}/api/v2/transaction/sale`;
-
-    // Public / Secret Key (recorta espacios por si acaso)
-    const xAuthKey = (process.env.PIXELPAY_KEY_ID || '').trim();
-    const xAuthHash = (process.env.PIXELPAY_SECRET_KEY || '').trim();
-
-    if (!xAuthKey || !xAuthHash) {
-      return res.status(500).json({
-        success: false,
-        message: 'Server misconfigured: missing PIXELPAY_KEY_ID / PIXELPAY_SECRET_KEY',
-      });
-    }
-
-    // 3) Body que llega desde FlutterFlow
-    const payload = req.body || {};
-    // Si estás en sandbox y PixelPay lo requiere, envía env:"sandbox"
-    if (env === 'sandbox' && !payload.env) payload.env = 'sandbox';
-
-    // 4) Llamada a PixelPay
-    const upstream = await fetch(saleUrl, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-auth-key': xAuthKey,     // <-- Public Key (la larga)
-        'x-auth-hash': xAuthHash,   // <-- Secret Key
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const text = await upstream.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
-
-    // Adjunta info mínima para depurar (sin exponer llaves)
-    const meta = {
-      status: upstream.status,
-      url: saleUrl,
-      env,
-      // Útil para confirmar que realmente estás enviando la Public Key (longitud)
-      _dbg: { xAuthKeyLen: xAuthKey.length }
-    };
-
-    return res.status(upstream.status).json({ ...data, _meta: meta });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal error calling PixelPay',
-      error: err?.message || String(err),
+    return new Response(JSON.stringify({ error: 'METHOD_NOT_ALLOWED' }), {
+      status: 405,
+      headers: { 'content-type': 'application/json' }
     });
   }
+
+  // 1) Lee el JSON EXACTO que te manda FlutterFlow (sin re-formatear)
+  const bodyObj = await req.json();
+  const rawPayload = JSON.stringify(bodyObj);
+
+  if (!PIXELPAY_PUBLIC_KEY || !PIXELPAY_SECRET_KEY) {
+    return new Response(JSON.stringify({ error: 'MISSING_CREDENTIALS' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' }
+    });
+  }
+
+  // 2) Calcula el SEAL = HMAC-SHA256(rawPayload, SECRET) en hex
+  const seal = await hmacHexSHA256(PIXELPAY_SECRET_KEY, rawPayload);
+
+  // 3) Llama a PixelPay
+  const res = await fetch(PIXELPAY_SALE_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-auth-key' : PIXELPAY_PUBLIC_KEY,   // pública tal cual
+      'x-auth-seal': seal                   // HMAC del payload
+    },
+    body: rawPayload,
+  });
+
+  // 4) Devuelve lo mismo que responda PixelPay
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' }
+  });
 }
