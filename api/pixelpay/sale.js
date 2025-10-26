@@ -1,6 +1,6 @@
 // /api/pixelpay/sale.js
-// **IMPORTANTE: Agrega ordenación alfabética para asegurar que el SEAL es correcto,
-// y usa PIXELPAY_PUBLIC_KEY (Clave Larga) para x-auth-key como prueba final.**
+// **Versión Final: Usa PIXELPAY_KEY_ID (ID de Comercio) para la autenticación 
+// y asegura la normalización del payload para un SEAL correcto.**
 
 export const config = { runtime: 'edge' };
 
@@ -12,17 +12,12 @@ function env(name, fallback = '') {
 const PIXELPAY_BASE        = env('PIXELPAY_BASE', 'https://banrural.pixelpay.app');
 const PIXELPAY_SALE_URL    = env('PIXELPAY_SALE_URL', `${PIXELPAY_BASE}/api/v2/transaction/sale`);
 
-// Cargamos AMBAS claves para asegurar que tenemos la Larga para el header.
-// Si esta prueba no funciona, deberás volver a usar PIXELPAY_KEY_ID en 'x-auth-key'
-// y contactar a soporte para el error de clave.
-const PIXELPAY_PUBLIC_KEY  = env('PIXELPAY_PUBLIC_KEY'); 
+// Volvemos a usar el ID de Comercio (PIXELPAY_KEY_ID) para la autenticación del header
+const PIXELPAY_MERCHANT_ID = env('PIXELPAY_KEY_ID'); 
 const PIXELPAY_SECRET_KEY  = env('PIXELPAY_SECRET_KEY'); 
 
 /**
- * Calcula el HMAC-SHA256 del payload usando la clave secreta.
- * @param {string} secret - La clave secreta de PixelPay.
- * @param {string} raw - El payload JSON serializado.
- * @returns {Promise<string>} El hash en formato hexadecimal.
+ * Calcula el HMAC-SHA256 del payload.
  */
 function hmacHexSHA256(secret, raw) {
     const enc = new TextEncoder();
@@ -38,8 +33,8 @@ function hmacHexSHA256(secret, raw) {
 }
 
 /**
- * Recursivamente ordena alfabéticamente las claves de un objeto.
- * Esto asegura que JSON.stringify() siempre produzca el mismo string para el HMAC.
+ * Ordena recursivamente las claves de un objeto para garantizar
+ * que JSON.stringify() siempre produzca el mismo string.
  */
 function sortObjectKeys(obj) {
     if (typeof obj !== 'object' || obj === null) {
@@ -50,7 +45,6 @@ function sortObjectKeys(obj) {
     }
     
     const sorted = {};
-    // Obtenemos las claves, las ordenamos y rellenamos el nuevo objeto
     Object.keys(obj).sort().forEach(key => {
         sorted[key] = sortObjectKeys(obj[key]);
     });
@@ -65,15 +59,14 @@ export default async function handler(req) {
         });
     }
 
-    // 1) Lee el JSON que te manda FlutterFlow
+    // 1) Lee el JSON de FlutterFlow
     const bodyObj = await req.json();
     
-    // 2) Normaliza el objeto: Ordena todas las claves alfabéticamente 
-    //    para garantizar que rawPayload siempre sea el mismo string.
+    // 2) Normaliza el objeto: CRÍTICO para asegurar que el SEAL siempre sea el mismo.
     const normalizedObj = sortObjectKeys(bodyObj);
-    const rawPayload = JSON.stringify(normalizedObj); // Este string es ahora consistente
+    const rawPayload = JSON.stringify(normalizedObj); 
 
-    if (!PIXELPAY_PUBLIC_KEY || !PIXELPAY_SECRET_KEY) {
+    if (!PIXELPAY_MERCHANT_ID || !PIXELPAY_SECRET_KEY) {
         return new Response(JSON.stringify({ error: 'MISSING_CREDENTIALS' }), {
             status: 500,
             headers: { 'content-type': 'application/json' }
@@ -83,13 +76,13 @@ export default async function handler(req) {
     // 3) Calcula el SEAL
     const seal = await hmacHexSHA256(PIXELPAY_SECRET_KEY, rawPayload);
 
-    // 4) Llama a PixelPay con la CLAVE LARGA (nuestra última prueba de autenticación)
+    // 4) Llama a PixelPay
     const res = await fetch(PIXELPAY_SALE_URL, {
         method: 'POST',
         headers: {
             'content-type': 'application/json',
-            // Usamos PIXELPAY_PUBLIC_KEY (Clave Larga) para la prueba final.
-            'x-auth-key' : PIXELPAY_PUBLIC_KEY, 
+            // Usamos PIXELPAY_KEY_ID (ID de Comercio) para el header.
+            'x-auth-key' : PIXELPAY_MERCHANT_ID, 
             'x-auth-seal': seal                   
         },
         body: rawPayload,
