@@ -1,10 +1,8 @@
 // /api/pixelpay/sale.js
-// **MÉTODO DE AUTENTICACIÓN: HASH-SHA512 (Ya que el SEAL falló consistentemente)**
-// Este archivo toma el JSON anidado de FlutterFlow, lo aplana, y lo envía con autenticación HASH.
-export const config = { runtime: 'edge' };
+// **CORREGIDO: Eliminada la configuración 'edge' para usar Node.js Runtime (soporta 'crypto').**
+// El runtime por defecto de Vercel (Node.js) soporta 'crypto'.
 
-// **NOTA:** Axios no está disponible en Vercel Edge Runtime. Usaremos Fetch API nativo y Crypto nativo.
-import { createHash } from 'crypto';
+import { createHash } from 'crypto'; // Esto ahora funciona
 
 function env(name, fallback = '') {
     const v = process.env[name] ?? '';
@@ -23,20 +21,13 @@ const COMERCIO_EMAIL = env('COMERCIO_EMAIL', 'lipsyerazo05@gmail.com');
  * Genera el hash SHA-512 de la clave secreta, requerido para x-auth-hash.
  */
 function generarSHA512(data) {
-    // Nota: 'crypto' en Edge Runtime a veces requiere polyfills si se usa el createHash de Node.js,
-    // pero en Vercel build environment, es más estable para una simple operación de hashing.
-    if (typeof createHash === 'function') {
-        return createHash("sha512").update(data).digest("hex");
-    }
-    // Fallback simple si createHash no está disponible, aunque es menos preciso.
-    // Para Edge Runtime puro, se necesitaría una importación diferente o usar SubtleCrypto para hashing.
-    console.error("Usando fallback de hash simple. Requiere la importación de 'crypto/web'.");
-    return data; 
+    // createHash ya está disponible en el runtime de Node.js
+    return createHash("sha512").update(data).digest("hex");
 }
 
 
 /**
- * Función CRÍTICA: Convierte el payload anidado de FlutterFlow al formato plano de PixelPay (Requerido por Hash Auth).
+ * Función CRÍTICA: Convierte el payload anidado de FlutterFlow al formato plano de PixelPay.
  * (Esta función NO se usa para el HASH, solo para el cuerpo de la venta).
  */
 function flattenPayload(bodyObj) {
@@ -74,33 +65,43 @@ function flattenPayload(bodyObj) {
 }
 
 
-export default async function handler(req) {
+export default async function handler(req, res) {
+    // req y res se usan en Node.js runtime por defecto
     if (req.method !== 'POST') {
-        return new Response(JSON.stringify({ error: 'METHOD_NOT_ALLOWED' }), {
-            status: 405,
-            headers: { 'content-type': 'application/json' }
-        });
+        res.status(405).json({ error: 'Method not allowed' });
+        return;
     }
 
     if (!PIXELPAY_KEY_ID || !PIXELPAY_SECRET_KEY) {
-        return new Response(JSON.stringify({ error: 'MISSING_CREDENTIALS' }), {
-            status: 500,
-            headers: { 'content-type': 'application/json' }
-        });
+        res.status(500).json({ error: 'MISSING_CREDENTIALS' });
+        return;
     }
 
-    // 1) Leer el JSON de FlutterFlow (anidado)
-    const bodyObj = await req.json();
+    // Leer el body de la petición Node.js
+    let rawBody = '';
+    await new Promise(resolve => {
+        req.on('data', chunk => rawBody += chunk);
+        req.on('end', resolve);
+    });
+
+    let bodyObj;
+    try {
+        bodyObj = JSON.parse(rawBody);
+    } catch (e) {
+        res.status(400).json({ error: 'INVALID_JSON' });
+        return;
+    }
+
     
     // 2) APLANAR EL OBJETO al formato plano que PixelPay espera.
     const flatPayload = flattenPayload(bodyObj);
 
     // 3) AUTENTICACIÓN HASH
-    // Nota: El hash se calcula solo sobre la clave secreta, NO sobre el payload.
     const hash_secreto = generarSHA512(PIXELPAY_SECRET_KEY);
 
     // 4) Llama a PixelPay
-    const res = await fetch(PIXELPAY_SALE_URL, {
+    const url = PIXELPAY_SALE_URL;
+    const { data, status } = await fetch(url, {
         method: 'POST',
         headers: {
             'content-type': 'application/json',
@@ -109,12 +110,13 @@ export default async function handler(req) {
             'x-auth-user': COMERCIO_EMAIL,
         },
         body: JSON.stringify(flatPayload), // Enviamos el payload plano
+    })
+    .then(response => response.json().then(data => ({ data, status: response.status })))
+    .catch(error => {
+        console.error("Fetch Error:", error);
+        return { data: { success: false, message: 'FETCH_FAILED' }, status: 500 };
     });
 
-    // 5) Devuelve lo mismo que responda PixelPay (maneja la redirect_url del 3DS)
-    const text = await res.text();
-    return new Response(text, {
-        status: res.status,
-        headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' }
-    });
+    // 5) Devuelve la respuesta
+    res.status(status).json(data);
 }
