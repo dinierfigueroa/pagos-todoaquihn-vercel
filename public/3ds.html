@@ -45,7 +45,7 @@
     });
 
     try {
-      Cardinal.setup("init", { jwt: TOKEN });   // <<— minúsculas
+      Cardinal.setup("init", { JWT: TOKEN });   // <<— minúsculas
       L("setup('init') enviado con jwt");
     } catch (e) { L("Error setup:", e?.message || e); }
   </script>
