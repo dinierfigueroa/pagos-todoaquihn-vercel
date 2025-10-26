@@ -1,6 +1,6 @@
 // /api/pixelpay/sale.js
-// **CORREGIDO: Eliminada la configuración 'edge' para usar Node.js Runtime (soporta 'crypto').**
-// El runtime por defecto de Vercel (Node.js) soporta 'crypto'.
+// **CORREGIDO: Usa Node.js Runtime (soporta 'crypto').**
+// **USA: Autenticación HASH, Payload Plano, Redirección a 3ds.html propio.**
 
 import { createHash } from 'crypto'; // Esto ahora funciona
 
@@ -16,18 +16,20 @@ const PIXELPAY_SECRET_KEY  = env('PIXELPAY_SECRET_KEY');
 
 // Correo del comercio para la autenticación x-auth-user
 const COMERCIO_EMAIL = env('COMERCIO_EMAIL', 'lipsyerazo05@gmail.com');
+// Base de la URL de tu propio proyecto Vercel para la redirección 3DS
+// Usaremos la URL de la request para construir esto de forma dinámica y segura.
 
 /**
  * Genera el hash SHA-512 de la clave secreta, requerido para x-auth-hash.
  */
 function generarSHA512(data) {
-    // createHash ya está disponible en el runtime de Node.js
     return createHash("sha512").update(data).digest("hex");
 }
 
 
 /**
  * Función CRÍTICA: Convierte el payload anidado de FlutterFlow al formato plano de PixelPay.
+ * Asegura que expire_year sea YY y el formato final YYMM.
  */
 function flattenPayload(bodyObj) {
     const { order, card, billing } = bodyObj;
@@ -44,9 +46,9 @@ function flattenPayload(bodyObj) {
         // Campos de Card
         card_number: card?.number,
         card_holder: card?.cardholder,
-        // Formato YYMM: Año (dos dígitos) seguido del Mes
+        // Formato YYMM: Año (dos dígitos) seguido del Mes (CRÍTICO)
         card_expire: `${card?.expire_year?.slice(2)}${card?.expire_month}`, 
-        card_cvv: card?.cvv2,
+        card_cvv: card?.cvv2, // PixelPay espera card_cvv o cvv2
 
         // Campos de Billing
         billing_address: billing?.address,
@@ -65,7 +67,6 @@ function flattenPayload(bodyObj) {
 
 
 export default async function handler(req, res) {
-    // req y res se usan en Node.js runtime por defecto
     if (req.method !== 'POST') {
         res.status(405).json({ error: 'Method not allowed' });
         return;
@@ -113,6 +114,7 @@ export default async function handler(req, res) {
     .then(response => response.json().then(data => ({ data, status: response.status })))
     .catch(error => {
         console.error("Fetch Error:", error);
+        // Si hay error de red, devolvemos un error controlado
         return { data: { success: false, message: 'FETCH_FAILED' }, status: 500 };
     });
 
@@ -120,21 +122,26 @@ export default async function handler(req, res) {
     if (data.success && data.message && data.message.includes("Transacción con intento de autenticación") && data.data?.payload) {
         
         const jwtPayload = data.data.payload;
+        const paymentUuid = data.data.payment_uuid; // Necesario para la URL de tu 3ds.html
         
-        // CORRECCIÓN CRÍTICA FINAL DE LA URL 3DS: Usar la base y el JWT como parte del path sin el parámetro '?token='.
-        const authUrl = `${PIXELPAY_BASE}/3ds/${jwtPayload}`; // <-- Prueba final del endpoint
+        // CONSTRUIR LA URL DE TU PROPIO WEBVIEW PERSONALIZADO (3ds.html)
+        // Usamos req.headers.host para construir la URL base dinámica de Vercel.
+        const host = req.headers.host || 'localhost';
+        const protocol = host.includes('localhost') ? 'http' : 'https';
+        
+        const authUrl = `${protocol}://${host}/3ds.html?token=${jwtPayload}&uuid=${paymentUuid}`;
 
-        // Devolvemos la respuesta a FlutterFlow en un formato que espera la 'redirect_url'
+        // Devolvemos la respuesta a FlutterFlow con la 'redirect_url' de TU WEBVIEW
         const responseToFlutterFlow = {
             success: true,
             message: data.message,
-            redirect_url: authUrl, // <-- URL CRÍTICA CORREGIDA
+            redirect_url: authUrl, // <-- URL CRÍTICA CORREGIDA a tu dominio
             order_id: flatPayload.order_id,
         };
 
         return res.status(200).json(responseToFlutterFlow);
     }
 
-    // 6) Devolver la respuesta original si no es 3DS
+    // 6) Devolver la respuesta original si no es 3DS (aprobación directa o fallo de tarjeta)
     res.status(status).json(data);
 }
