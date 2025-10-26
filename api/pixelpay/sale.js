@@ -1,5 +1,5 @@
 // /api/pixelpay/sale.js
-// **Implementación de seguridad: Fuerza un string JSON compacto para el HMAC.**
+// **CORRECCIÓN CRÍTICA: APLANA el JSON anidado de FlutterFlow al formato plano de PixelPay.**
 
 export const config = { runtime: 'edge' };
 
@@ -32,8 +32,7 @@ function hmacHexSHA256(secret, raw) {
 }
 
 /**
- * Ordena recursivamente las claves de un objeto para garantizar
- * que JSON.stringify() siempre produzca el mismo string. (Sin Cambios)
+ * Ordena recursivamente las claves de un objeto. (Sin Cambios)
  */
 function sortObjectKeys(obj) {
     if (typeof obj !== 'object' || obj === null) {
@@ -50,6 +49,46 @@ function sortObjectKeys(obj) {
     return sorted;
 }
 
+/**
+ * Función CRÍTICA: Convierte el payload anidado de FlutterFlow al formato plano de PixelPay.
+ * @param {object} bodyObj - El objeto JSON anidado que viene de FlutterFlow.
+ * @returns {object} El objeto JSON plano esperado por la API de PixelPay.
+ */
+function flattenPayload(bodyObj) {
+    const { order, card, billing } = bodyObj;
+    
+    const flat = {
+        // Campos de Order (Tu formato vs. Formato PixelPay)
+        order_id: order?.id,
+        order_currency: order?.currency,
+        order_amount: order?.amount,
+        customer_name: order?.customer_name,
+        customer_email: order?.customer_email,
+
+        // Campos de Card
+        card_number: card?.number,
+        card_holder: card?.cardholder,
+        // CORRECCIÓN: PixelPay espera 'YYMM' (Año de dos dígitos, seguido del Mes)
+        card_expire: `${card?.expire_year?.slice(2)}${card?.expire_month}`, 
+        card_cvv: card?.cvv2,
+
+        // Campos de Billing
+        billing_address: billing?.address,
+        billing_country: billing?.country,
+        billing_state: billing?.state,
+        billing_city: billing?.city,
+        billing_phone: billing?.phone,
+
+        // Campos adicionales requeridos para la API v2 o 3DS
+        lang: 'es', // Se recomienda enviar el idioma
+        env: process.env.PIXELPAY_ENV || 'production', // Leer del ENV de Vercel
+    };
+
+    // Filtra campos undefined si es necesario, aunque JSON.stringify los ignora
+    return flat;
+}
+
+
 export default async function handler(req) {
     if (req.method !== 'POST') {
         return new Response(JSON.stringify({ error: 'METHOD_NOT_ALLOWED' }), {
@@ -58,14 +97,16 @@ export default async function handler(req) {
         });
     }
 
-    // 1) Lee el JSON de FlutterFlow
+    // 1) Lee el JSON de FlutterFlow (anidado)
     const bodyObj = await req.json();
     
-    // 2) Normaliza el objeto: CRÍTICO para asegurar el orden.
-    const normalizedObj = sortObjectKeys(bodyObj);
+    // 2) APLANA EL OBJETO
+    const flatObj = flattenPayload(bodyObj);
+
+    // 3) Normaliza el objeto plano: CRÍTICO para asegurar el orden.
+    const normalizedObj = sortObjectKeys(flatObj);
     
-    // 3) CREA el string JSON COMPACTO (sin espacios ni saltos de línea)
-    //    Esto es clave para el cálculo exacto del HMAC.
+    // 4) CREA el string JSON COMPACTO para el HMAC y el body final.
     const rawPayload = JSON.stringify(normalizedObj); 
 
     if (!PIXELPAY_MERCHANT_ID || !PIXELPAY_SECRET_KEY) {
@@ -75,10 +116,10 @@ export default async function handler(req) {
         });
     }
 
-    // 4) Calcula el SEAL
+    // 5) Calcula el SEAL
     const seal = await hmacHexSHA256(PIXELPAY_SECRET_KEY, rawPayload);
 
-    // 5) Llama a PixelPay
+    // 6) Llama a PixelPay
     const res = await fetch(PIXELPAY_SALE_URL, {
         method: 'POST',
         headers: {
@@ -86,10 +127,10 @@ export default async function handler(req) {
             'x-auth-key' : PIXELPAY_MERCHANT_ID, 
             'x-auth-seal': seal                   
         },
-        body: rawPayload,
+        body: rawPayload, // Enviamos el payload plano y normalizado
     });
 
-    // 6) Devuelve lo mismo que responda PixelPay
+    // 7) Devuelve lo mismo que responda PixelPay
     const text = await res.text();
     return new Response(text, {
         status: res.status,
