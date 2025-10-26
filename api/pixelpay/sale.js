@@ -121,9 +121,8 @@ export default async function handler(req, res) {
         
         const jwtPayload = data.data.payload;
         
-        // CORRECCIÓN CRÍTICA DE LA URL 3DS: Usar la base y enviar el JWT como parámetro 'token'
-        // Esto es un formato más estándar para la autenticación 3DS.
-        const authUrl = `${PIXELPAY_BASE}/3ds/?token=${jwtPayload}`;
+        // CORRECCIÓN CRÍTICA FINAL DE LA URL 3DS: Usar la base y el JWT como parte del path sin el parámetro '?token='.
+        const authUrl = `${PIXELPAY_BASE}/3ds/${jwtPayload}`; // <-- Prueba final del endpoint
 
         // Devolvemos la respuesta a FlutterFlow en un formato que espera la 'redirect_url'
         const responseToFlutterFlow = {
