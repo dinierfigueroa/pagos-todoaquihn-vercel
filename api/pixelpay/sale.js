@@ -28,7 +28,6 @@ function generarSHA512(data) {
 
 /**
  * Función CRÍTICA: Convierte el payload anidado de FlutterFlow al formato plano de PixelPay.
- * (Esta función NO se usa para el HASH, solo para el cuerpo de la venta).
  */
 function flattenPayload(bodyObj) {
     const { order, card, billing } = bodyObj;
@@ -117,6 +116,25 @@ export default async function handler(req, res) {
         return { data: { success: false, message: 'FETCH_FAILED' }, status: 500 };
     });
 
-    // 5) Devuelve la respuesta
+    // 5) Manejar y transformar la respuesta
+    if (data.success && data.message && data.message.includes("Transacción con intento de autenticación") && data.data?.payload) {
+        
+        const jwtPayload = data.data.payload;
+        
+        // Construimos la URL de 3DS: BASE + /3ds/authenticate/ + JWT_PAYLOAD
+        const authUrl = `${PIXELPAY_BASE}/3ds/authenticate/${jwtPayload}`;
+
+        // Devolvemos la respuesta a FlutterFlow en un formato que espera la 'redirect_url'
+        const responseToFlutterFlow = {
+            success: true,
+            message: data.message,
+            redirect_url: authUrl, // <-- URL CRÍTICA
+            order_id: flatPayload.order_id,
+        };
+
+        return res.status(200).json(responseToFlutterFlow);
+    }
+
+    // 6) Devolver la respuesta original si no es 3DS
     res.status(status).json(data);
 }
